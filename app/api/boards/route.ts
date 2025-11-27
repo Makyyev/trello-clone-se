@@ -1,37 +1,51 @@
-// app/api/boards/route.ts
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { logApiRequest } from "@/lib/logger";
+import { ObjectId } from "mongodb";
 
-export async function GET() {
-  const path = "/api/boards";
+function getObjectId(id: string) {
   try {
+    return new ObjectId(id);
+  } catch {
+    return null;
+  }
+}
+
+// Next 16: params is a Promise and must be awaited
+type RouteContext = { params: Promise<{ boardId: string }> };
+
+// GET single board
+export async function GET(_request: Request, context: RouteContext) {
+  try {
+    const { boardId } = await context.params;
+    const objectId = getObjectId(boardId);
+
+    if (!objectId) {
+      return NextResponse.json(
+        { error: "Invalid board id" },
+        { status: 400 }
+      );
+    }
+
     const db = await getDb();
     const boardsCollection = db.collection("boards");
 
-    const boards = await boardsCollection
-      .find({})
-      .sort({ createdAt: 1 })
-      .toArray();
+    const board = await boardsCollection.findOne({ _id: objectId });
 
-    const data = boards.map((b) => ({
-      id: b._id.toString(),
-      name: b.name as string,
-      createdAt: b.createdAt,
-      updatedAt: b.updatedAt,
-    }));
+    if (!board) {
+      return NextResponse.json(
+        { error: "Board not found" },
+        { status: 404 }
+      );
+    }
 
-    logApiRequest({ method: "GET", path, status: 200, extra: { count: data.length } });
-
-    return NextResponse.json(data);
-  } catch (error: any) {
-    console.error("GET /api/boards error:", error);
-    logApiRequest({
-      method: "GET",
-      path,
-      status: 500,
-      extra: { error: error?.message },
+    return NextResponse.json({
+      id: board._id.toString(),
+      name: board.name as string,
+      createdAt: board.createdAt,
+      updatedAt: board.updatedAt,
     });
+  } catch (error: any) {
+    console.error("GET /api/boards/[boardId] error:", error);
     return NextResponse.json(
       { error: error.message ?? "Unknown error" },
       { status: 500 }
@@ -39,19 +53,23 @@ export async function GET() {
   }
 }
 
-export async function POST(request: Request) {
-  const path = "/api/boards";
+// PATCH rename board
+export async function PATCH(request: Request, context: RouteContext) {
   try {
+    const { boardId } = await context.params;
+    const objectId = getObjectId(boardId);
+
+    if (!objectId) {
+      return NextResponse.json(
+        { error: "Invalid board id" },
+        { status: 400 }
+      );
+    }
+
     const body = await request.json();
     const name = (body.name ?? "").toString().trim();
 
     if (!name) {
-      logApiRequest({
-        method: "POST",
-        path,
-        status: 400,
-        extra: { reason: "missing_name" },
-      });
       return NextResponse.json(
         { error: "Name is required" },
         { status: 400 }
@@ -63,35 +81,65 @@ export async function POST(request: Request) {
 
     const now = new Date();
 
-    const insertResult = await boardsCollection.insertOne({
-      name,
-      createdAt: now,
-      updatedAt: now,
+    const result = await boardsCollection.findOneAndUpdate(
+      { _id: objectId },
+      { $set: { name, updatedAt: now } },
+      { returnDocument: "after" }
+    );
+
+    // TypeScript fix: result itself may be null
+    if (!result || !result.value) {
+      return NextResponse.json(
+        { error: "Board not found" },
+        { status: 404 }
+      );
+    }
+
+    const board = result.value;
+
+    return NextResponse.json({
+      id: board._id.toString(),
+      name: board.name as string,
+      createdAt: board.createdAt,
+      updatedAt: board.updatedAt,
     });
-
-    const payload = {
-      id: insertResult.insertedId.toString(),
-      name,
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    logApiRequest({
-      method: "POST",
-      path,
-      status: 201,
-      extra: { id: payload.id },
-    });
-
-    return NextResponse.json(payload, { status: 201 });
   } catch (error: any) {
-    console.error("POST /api/boards error:", error);
-    logApiRequest({
-      method: "POST",
-      path,
-      status: 500,
-      extra: { error: error?.message },
-    });
+    console.error("PATCH /api/boards/[boardId] error:", error);
+    return NextResponse.json(
+      { error: error.message ?? "Unknown error" },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE board
+export async function DELETE(_request: Request, context: RouteContext) {
+  try {
+    const { boardId } = await context.params;
+    const objectId = getObjectId(boardId);
+
+    if (!objectId) {
+      return NextResponse.json(
+        { error: "Invalid board id" },
+        { status: 400 }
+      );
+    }
+
+    const db = await getDb();
+    const boardsCollection = db.collection("boards");
+
+    const result = await boardsCollection.deleteOne({ _id: objectId });
+
+    if (result.deletedCount === 0) {
+      return NextResponse.json(
+        { error: "Board not found" },
+        { status: 404 }
+      );
+    }
+
+    return NextResponse.json({ ok: true });
+  } catch (error: any) {
+    console.error("DELETE /api/boards/[boardId] error:", error);
     return NextResponse.json(
       { error: error.message ?? "Unknown error" },
       { status: 500 }
