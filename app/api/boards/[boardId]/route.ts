@@ -1,6 +1,11 @@
-import { NextResponse } from "next/server";
+// app/api/boards/[boardId]/route.ts
+import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { ObjectId } from "mongodb";
+
+type RouteContext = {
+  params: Promise<{ boardId: string }>;
+};
 
 function getObjectId(id: string) {
   try {
@@ -10,26 +15,26 @@ function getObjectId(id: string) {
   }
 }
 
-// Next 16: params is a Promise and must be awaited
-type RouteContext = { params: Promise<{ boardId: string }> };
+// GET /api/boards/[boardId]  -> get single board
+export async function GET(
+  _request: NextRequest,
+  context: RouteContext
+) {
+  const { boardId } = await context.params;
+  const objectId = getObjectId(boardId);
 
-// GET single board
-export async function GET(_request: Request, context: RouteContext) {
+  if (!objectId) {
+    return NextResponse.json(
+      { error: "Invalid board id" },
+      { status: 400 }
+    );
+  }
+
   try {
-    const { boardId } = await context.params;
-    const objectId = getObjectId(boardId);
-
-    if (!objectId) {
-      return NextResponse.json(
-        { error: "Invalid board id" },
-        { status: 400 }
-      );
-    }
-
     const db = await getDb();
-    const boardsCollection = db.collection("boards");
+    const boards = db.collection("boards");
 
-    const board = await boardsCollection.findOne({ _id: objectId });
+    const board = await boards.findOne({ _id: objectId });
 
     if (!board) {
       return NextResponse.json(
@@ -44,50 +49,53 @@ export async function GET(_request: Request, context: RouteContext) {
       createdAt: board.createdAt,
       updatedAt: board.updatedAt,
     });
-  } catch (error: any) {
-    console.error("GET /api/boards/[boardId] error:", error);
+  } catch (err: any) {
+    console.error("GET /api/boards/[boardId] error:", err);
     return NextResponse.json(
-      { error: error.message ?? "Unknown error" },
+      { error: err?.message ?? "Unknown error" },
       { status: 500 }
     );
   }
 }
 
-// PATCH rename board
-export async function PATCH(request: Request, context: RouteContext) {
+// PATCH /api/boards/[boardId]  -> rename board
+export async function PATCH(
+  request: NextRequest,
+  context: RouteContext
+) {
+  const { boardId } = await context.params;
+  const objectId = getObjectId(boardId);
+
+  if (!objectId) {
+    return NextResponse.json(
+      { error: "Invalid board id" },
+      { status: 400 }
+    );
+  }
+
+  const body = await request.json();
+  const name = (body.name ?? "").toString().trim();
+
+  if (!name) {
+    return NextResponse.json(
+      { error: "Name is required" },
+      { status: 400 }
+    );
+  }
+
   try {
-    const { boardId } = await context.params;
-    const objectId = getObjectId(boardId);
-
-    if (!objectId) {
-      return NextResponse.json(
-        { error: "Invalid board id" },
-        { status: 400 }
-      );
-    }
-
-    const body = await request.json();
-    const name = (body.name ?? "").toString().trim();
-
-    if (!name) {
-      return NextResponse.json(
-        { error: "Name is required" },
-        { status: 400 }
-      );
-    }
-
     const db = await getDb();
-    const boardsCollection = db.collection("boards");
-
+    const boards = db.collection("boards");
     const now = new Date();
 
-    const result = await boardsCollection.findOneAndUpdate(
+    const result = await boards.findOneAndUpdate(
       { _id: objectId },
       { $set: { name, updatedAt: now } },
       { returnDocument: "after" }
     );
 
-    if (!result.value) {
+    // IMPORTANT: guard both result and result.value
+    if (!result || !result.value) {
       return NextResponse.json(
         { error: "Board not found" },
         { status: 404 }
@@ -102,32 +110,52 @@ export async function PATCH(request: Request, context: RouteContext) {
       createdAt: board.createdAt,
       updatedAt: board.updatedAt,
     });
-  } catch (error: any) {
-    console.error("PATCH /api/boards/[boardId] error:", error);
+  } catch (err: any) {
+    console.error("PATCH /api/boards/[boardId] error:", err);
     return NextResponse.json(
-      { error: error.message ?? "Unknown error" },
+      { error: err?.message ?? "Unknown error" },
       { status: 500 }
     );
   }
 }
 
-// DELETE board
-export async function DELETE(_request: Request, context: RouteContext) {
-  try {
-    const { boardId } = await context.params;
-    const objectId = getObjectId(boardId);
+// DELETE /api/boards/[boardId]  -> delete board + its lists + cards
+export async function DELETE(
+  _request: NextRequest,
+  context: RouteContext
+) {
+  const { boardId } = await context.params;
+  const objectId = getObjectId(boardId);
 
-    if (!objectId) {
-      return NextResponse.json(
-        { error: "Invalid board id" },
-        { status: 400 }
-      );
+  if (!objectId) {
+    return NextResponse.json(
+      { error: "Invalid board id" },
+      { status: 400 }
+    );
+  }
+
+  try {
+    const db = await getDb();
+    const boards = db.collection("boards");
+    const lists = db.collection("lists");
+    const cards = db.collection("cards");
+
+    // Find lists of this board
+    const boardLists = await lists
+      .find({ boardId: objectId.toString() })
+      .toArray();
+    const listIds = boardLists.map((l) => l._id.toString());
+
+    // Delete cards from those lists
+    if (listIds.length > 0) {
+      await cards.deleteMany({ listId: { $in: listIds } });
     }
 
-    const db = await getDb();
-    const boardsCollection = db.collection("boards");
+    // Delete lists
+    await lists.deleteMany({ boardId: objectId.toString() });
 
-    const result = await boardsCollection.deleteOne({ _id: objectId });
+    // Delete board
+    const result = await boards.deleteOne({ _id: objectId });
 
     if (result.deletedCount === 0) {
       return NextResponse.json(
@@ -136,11 +164,11 @@ export async function DELETE(_request: Request, context: RouteContext) {
       );
     }
 
-    return NextResponse.json({ ok: true });
-  } catch (error: any) {
-    console.error("DELETE /api/boards/[boardId] error:", error);
+    return NextResponse.json({ success: true });
+  } catch (err: any) {
+    console.error("DELETE /api/boards/[boardId] error:", err);
     return NextResponse.json(
-      { error: error.message ?? "Unknown error" },
+      { error: err?.message ?? "Unknown error" },
       { status: 500 }
     );
   }
