@@ -1,65 +1,133 @@
-import Image from "next/image";
+"use client";
+
+import React, { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+
+type Board = {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+};
 
 export default function Home() {
+  const router = useRouter();
+  const [boards, setBoards] = useState<Board[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    const loadBoards = async () => {
+      try {
+        const res = await fetch("/api/boards");
+        if (!res.ok) {
+          throw new Error(`Failed to load boards: ${res.status}`);
+        }
+        const data = (await res.json()) as Board[];
+        setBoards(data);
+      } catch (err: any) {
+        console.error(err);
+        setError(err.message ?? "Unknown error");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadBoards();
+  }, []);
+
+  const handleCreateBoard = async () => {
+    const name = window.prompt("Board name:");
+    if (!name) return;
+
+    try {
+      setCreating(true);
+      const res = await fetch("/api/boards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const msg = body.error ?? `Failed to create board: ${res.status}`;
+        throw new Error(msg);
+      }
+
+      const created = (await res.json()) as Board;
+      setBoards((prev) => [...prev, created]);
+    } catch (err: any) {
+      console.error(err);
+      window.alert(err.message ?? "Error creating board");
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <main className="min-h-screen bg-slate-950 text-slate-50">
+      <div className="mx-auto max-w-6xl px-4 py-8">
+        <header className="mb-8 flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">
+              Simple Trello Clone
+            </h1>
+            <p className="text-sm text-slate-400">
+              Boards are loaded from MongoDB via /api/boards.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleCreateBoard}
+            disabled={creating}
+            className="rounded-md bg-emerald-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-slate-950"
+          >
+            {creating ? "Creating..." : "+ New Board"}
+          </button>
+        </header>
+
+        {error && (
+          <div className="mb-4 rounded-md border border-red-500/60 bg-red-500/10 px-4 py-2 text-sm text-red-200">
+            Error: {error}
+          </div>
+        )}
+
+        {loading ? (
+          <p className="text-sm text-slate-400">Loading boards...</p>
+        ) : boards.length === 0 ? (
+          <p className="text-sm text-slate-400">
+            No boards yet. Click &quot;New Board&quot; to create one.
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        ) : (
+          <section>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold">Boards</h2>
+              <span className="text-xs uppercase tracking-wide text-slate-400">
+                {boards.length} board{boards.length === 1 ? "" : "s"}
+              </span>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
+              {boards.map((board) => (
+                <button
+                  key={board.id}
+                  type="button"
+                  onClick={() => router.push(`/boards/${board.id}`)}
+                  className="flex h-32 flex-col justify-between rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-left shadow-sm transition hover:border-emerald-500 hover:bg-slate-900"
+                >
+                  <span className="text-base font-semibold">
+                    {board.name}
+                  </span>
+                  <span className="text-xs text-slate-400">
+                    Click to open this board
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+    </main>
   );
 }
