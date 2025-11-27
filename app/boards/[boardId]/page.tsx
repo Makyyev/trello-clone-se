@@ -53,95 +53,24 @@ export default function BoardPage({ params }: PageProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // card modal state
-  const [selectedCard, setSelectedCard] = useState<{
-    listId: string;
-    card: Card;
-  } | null>(null);
-  const [modalTitle, setModalTitle] = useState("");
-  const [modalDescription, setModalDescription] = useState("");
+  // list editing / deleting
+  const [editingListId, setEditingListId] = useState<string | null>(null);
+  const [editingListName, setEditingListName] = useState("");
+  const [renamingListId, setRenamingListId] = useState<string | null>(null);
+  const [creatingList, setCreatingList] = useState(false);
+  const [deletingListId, setDeletingListId] = useState<string | null>(null);
 
-  // ---------- CRUD HELPERS ----------
+  // pretty confirmation modal for lists
+  const [confirmListId, setConfirmListId] = useState<string | null>(null);
+  const [confirmListName, setConfirmListName] = useState("");
 
-  async function handleCreateList() {
-    const name = newListTitle.trim();
-    if (!name) return;
-
-    try {
-      const res = await fetch(`/api/boards/${boardId}/lists`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`Failed to create list (${res.status})`);
-      }
-
-      const created = await res.json();
-
-      setLists((prev) => [
-        ...prev,
-        {
-          id: created.id,
-          boardId: created.boardId,
-          name: created.name,
-          position: created.position,
-          cards: [],
-        },
-      ]);
-      setNewListTitle("");
-    } catch (err) {
-      console.error("Error creating list:", err);
-      alert("Could not create list.");
-    }
-  }
-
-  async function handleRenameList(listId: string) {
-    const current = lists.find((l) => l.id === listId);
-    const newName = prompt("New list name:", current?.name ?? "");
-    if (!newName) return;
-
-    try {
-      const res = await fetch(`/api/lists/${listId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName.trim() }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`Failed to rename list (${res.status})`);
-      }
-
-      setLists((prev) =>
-        prev.map((l) =>
-          l.id === listId ? { ...l, name: newName.trim() } : l
-        )
-      );
-    } catch (err) {
-      console.error("Error renaming list:", err);
-      alert("Could not rename list.");
-    }
-  }
-
-  async function handleDeleteList(listId: string) {
-    if (!confirm("Delete this list and all its cards?")) return;
-
-    try {
-      const res = await fetch(`/api/lists/${listId}`, {
-        method: "DELETE",
-      });
-
-      if (!res.ok) {
-        throw new Error(`Failed to delete list (${res.status})`);
-      }
-
-      setLists((prev) => prev.filter((l) => l.id !== listId));
-    } catch (err) {
-      console.error("Error deleting list:", err);
-      alert("Could not delete list.");
-    }
-  }
+  // card modal (title + description)
+  const [activeCard, setActiveCard] = useState<Card | null>(null);
+  const [activeCardListId, setActiveCardListId] = useState<string | null>(null);
+  const [cardTitleInput, setCardTitleInput] = useState("");
+  const [cardDescInput, setCardDescInput] = useState("");
+  const [savingCard, setSavingCard] = useState(false);
+  const [deletingCardId, setDeletingCardId] = useState<string | null>(null);
 
   async function handleAddCard(listId: string, title: string) {
     const cleaned = title.trim();
@@ -182,15 +111,185 @@ export default function BoardPage({ params }: PageProps) {
       setNewCardTitles((prev) => ({ ...prev, [listId]: "" }));
     } catch (err) {
       console.error("Error creating card:", err);
-      alert("Could not create card.");
+      setError("Failed to create card");
     }
   }
 
-  async function handleDeleteCard(cardId: string, listId: string) {
-    if (!confirm("Delete this card?")) return;
+  async function handleCreateList() {
+    const name = newListTitle.trim();
+    if (!name) return;
 
     try {
-      const res = await fetch(`/api/cards/${cardId}`, {
+      setCreatingList(true);
+      setError(null);
+
+      const res = await fetch(`/api/boards/${boardId}/lists`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to create list (${res.status})`);
+      }
+
+      const created = await res.json();
+
+      const newList: List = {
+        id: created._id?.toString?.() ?? created.id,
+        boardId,
+        name: created.name,
+        position: created.position ?? lists.length + 1,
+        cards: [],
+      };
+
+      setLists((prev) => [...prev, newList]);
+      setNewListTitle("");
+    } catch (err: any) {
+      console.error("Error creating list:", err);
+      setError(err.message ?? "Unexpected error");
+    } finally {
+      setCreatingList(false);
+    }
+  }
+
+  async function handleRenameList(listId: string, newName: string) {
+    const cleaned = newName.trim();
+    if (!cleaned) {
+      setEditingListId(null);
+      setEditingListName("");
+      return;
+    }
+
+    try {
+      setRenamingListId(listId);
+      setError(null);
+
+      const res = await fetch(`/api/lists/${listId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: cleaned }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to rename list (${res.status})`);
+      }
+
+      setLists((prev) =>
+        prev.map((l) => (l.id === listId ? { ...l, name: cleaned } : l))
+      );
+    } catch (err: any) {
+      console.error("Error renaming list:", err);
+      setError(err.message ?? "Unexpected error");
+    } finally {
+      setRenamingListId(null);
+      setEditingListId(null);
+      setEditingListName("");
+    }
+  }
+
+  async function handleDeleteList(listId: string) {
+    try {
+      setDeletingListId(listId);
+      setError(null);
+
+      const res = await fetch(`/api/lists/${listId}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to delete list (${res.status})`);
+      }
+
+      setLists((prev) => prev.filter((l) => l.id !== listId));
+    } catch (err: any) {
+      console.error("Error deleting list:", err);
+      setError(err.message ?? "Unexpected error");
+    } finally {
+      setDeletingListId(null);
+      setConfirmListId(null);
+      setConfirmListName("");
+    }
+  }
+
+  // open / close list confirm modal
+  function openListConfirm(list: List) {
+    setConfirmListId(list.id);
+    setConfirmListName(list.name);
+  }
+
+  function closeListConfirm() {
+    setConfirmListId(null);
+    setConfirmListName("");
+  }
+
+  // card modal helpers
+  function openCardModal(listId: string, card: Card) {
+    setActiveCard(card);
+    setActiveCardListId(listId);
+    setCardTitleInput(card.title);
+    setCardDescInput(card.description ?? "");
+  }
+
+  function closeCardModal() {
+    setActiveCard(null);
+    setActiveCardListId(null);
+    setCardTitleInput("");
+    setCardDescInput("");
+  }
+
+  async function handleSaveCard() {
+    if (!activeCard || !activeCardListId) return;
+
+    const title = cardTitleInput.trim();
+    const description = cardDescInput.trim();
+
+    if (!title) return;
+
+    try {
+      setSavingCard(true);
+      setError(null);
+
+      const res = await fetch(`/api/cards/${activeCard.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, description }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to update card (${res.status})`);
+      }
+
+      setLists((prev) =>
+        prev.map((list) =>
+          list.id === activeCardListId
+            ? {
+                ...list,
+                cards: list.cards.map((c) =>
+                  c.id === activeCard.id ? { ...c, title, description } : c
+                ),
+              }
+            : list
+        )
+      );
+
+      closeCardModal();
+    } catch (err: any) {
+      console.error("Error updating card:", err);
+      setError(err.message ?? "Unexpected error");
+    } finally {
+      setSavingCard(false);
+    }
+  }
+
+  async function handleDeleteCardFromModal() {
+    if (!activeCard || !activeCardListId) return;
+
+    try {
+      setDeletingCardId(activeCard.id);
+      setError(null);
+
+      const res = await fetch(`/api/cards/${activeCard.id}`, {
         method: "DELETE",
       });
 
@@ -199,83 +298,24 @@ export default function BoardPage({ params }: PageProps) {
       }
 
       setLists((prev) =>
-        prev.map((l) =>
-          l.id === listId
-            ? { ...l, cards: l.cards.filter((c) => c.id !== cardId) }
-            : l
-        )
-      );
-
-      if (selectedCard && selectedCard.card.id === cardId) {
-        setSelectedCard(null);
-      }
-    } catch (err) {
-      console.error("Error deleting card:", err);
-      alert("Could not delete card.");
-    }
-  }
-
-  // ---------- CARD MODAL HELPERS ----------
-
-  function openCardModal(listId: string, card: Card) {
-    setSelectedCard({ listId, card });
-    setModalTitle(card.title);
-    setModalDescription(card.description ?? "");
-  }
-
-  function closeCardModal() {
-    setSelectedCard(null);
-  }
-
-  async function handleSaveCardModal() {
-    if (!selectedCard) return;
-    const { listId, card } = selectedCard;
-    const title = modalTitle.trim();
-    const description = modalDescription.trim();
-
-    if (!title) {
-      alert("Title is required.");
-      return;
-    }
-
-    try {
-      const res = await fetch(`/api/cards/${card.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, description }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`Failed to rename card (${res.status})`);
-      }
-
-      setLists((prev) =>
-        prev.map((l) =>
-          l.id === listId
+        prev.map((list) =>
+          list.id === activeCardListId
             ? {
-                ...l,
-                cards: l.cards.map((c) =>
-                  c.id === card.id ? { ...c, title, description } : c
-                ),
+                ...list,
+                cards: list.cards.filter((c) => c.id !== activeCard.id),
               }
-            : l
+            : list
         )
       );
 
-      setSelectedCard(null);
-    } catch (err) {
-      console.error("Error renaming card:", err);
-      alert("Could not update card.");
+      closeCardModal();
+    } catch (err: any) {
+      console.error("Error deleting card:", err);
+      setError(err.message ?? "Unexpected error");
+    } finally {
+      setDeletingCardId(null);
     }
   }
-
-  async function handleDeleteCardFromModal() {
-    if (!selectedCard) return;
-    await handleDeleteCard(selectedCard.card.id, selectedCard.listId);
-    setSelectedCard(null);
-  }
-
-  // ---------- INITIAL LOAD ----------
 
   useEffect(() => {
     async function loadData() {
@@ -336,12 +376,10 @@ export default function BoardPage({ params }: PageProps) {
     loadData();
   }, [boardId]);
 
-  // ---------- RENDER ----------
-
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50">
       <header className="border-b border-slate-800 bg-slate-900/70 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center gap-4 px-4 py-4">
+        <div className="mx-auto max-w-6xl flex items-center gap-4 px-4 py-4">
           <Link
             href="/"
             className="rounded bg-slate-800 px-3 py-1 text-sm hover:bg-slate-700"
@@ -377,26 +415,62 @@ export default function BoardPage({ params }: PageProps) {
 
         {!loading && !error && (
           <div className="flex gap-4 overflow-x-auto pb-4">
-            {/* Existing lists */}
+            {lists.length === 0 && (
+              <div className="rounded border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-slate-300">
+                This board has no lists yet.
+              </div>
+            )}
+
             {lists.map((list) => (
               <div
                 key={list.id}
-                className="flex w-72 flex-shrink-0 flex-col gap-2 rounded-xl border border-slate-800 bg-slate-900 p-3"
+                className="w-72 flex-shrink-0 rounded-xl border border-slate-800 bg-slate-900 p-3 flex flex-col gap-2"
               >
-                <div className="flex items-center justify-between">
-                  <h2 className="text-sm font-semibold">{list.name}</h2>
-                  <div className="flex gap-1 text-xs">
+                {/* List header: name + edit + delete */}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    {editingListId === list.id ? (
+                      <input
+                        autoFocus
+                        value={editingListName}
+                        onChange={(e) => setEditingListName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleRenameList(list.id, editingListName);
+                          } else if (e.key === "Escape") {
+                            setEditingListId(null);
+                            setEditingListName("");
+                          }
+                        }}
+                        onBlur={() =>
+                          handleRenameList(list.id, editingListName || list.name)
+                        }
+                        className="w-full rounded bg-slate-950 px-2 py-1 text-sm border border-slate-700 focus:outline-none focus:ring focus:ring-emerald-500/40"
+                      />
+                    ) : (
+                      <h2 className="truncate text-sm font-semibold">
+                        {list.name}
+                      </h2>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1">
                     <button
-                      onClick={() => handleRenameList(list.id)}
-                      className="rounded bg-slate-800 px-1.5 py-0.5 hover:bg-slate-700"
-                      title="Rename list"
+                      onClick={() => {
+                        setEditingListId(list.id);
+                        setEditingListName(list.name);
+                      }}
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-full text-xs text-slate-400 hover:text-emerald-300 hover:bg-slate-800"
+                      aria-label="Rename list"
                     >
                       ✏️
                     </button>
                     <button
-                      onClick={() => handleDeleteList(list.id)}
-                      className="rounded bg-slate-800 px-1.5 py-0.5 hover:bg-red-700"
-                      title="Delete list"
+                      onClick={() => openListConfirm(list)}
+                      disabled={deletingListId === list.id}
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-full text-xs text-slate-500 hover:text-red-400 hover:bg-red-950/40 disabled:opacity-50"
+                      aria-label="Delete list"
                     >
                       🗑
                     </button>
@@ -407,15 +481,14 @@ export default function BoardPage({ params }: PageProps) {
                   {list.cards.length} cards
                 </span>
 
-                <div className="flex-1 space-y-2">
+                <div className="space-y-2 flex-1">
                   {list.cards.map((card) => (
                     <button
                       key={card.id}
-                      type="button"
                       onClick={() => openCardModal(list.id, card)}
-                      className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-left text-xs hover:border-emerald-500/80 hover:bg-slate-900"
+                      className="w-full text-left rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs hover:border-emerald-500/70 hover:bg-slate-900"
                     >
-                      <div className="font-medium text-slate-50">
+                      <div className="font-medium text-slate-50 truncate">
                         {card.title}
                       </div>
                       {card.description && (
@@ -433,7 +506,7 @@ export default function BoardPage({ params }: PageProps) {
                   )}
 
                   {/* New card input */}
-                  <div className="mt-2 border-t border-slate-800 pt-2">
+                  <div className="pt-2 border-t border-slate-800 mt-2">
                     <input
                       type="text"
                       placeholder="New card title..."
@@ -451,13 +524,13 @@ export default function BoardPage({ params }: PageProps) {
                           handleAddCard(list.id, newCardTitles[list.id] ?? "");
                         }
                       }}
-                      className="mb-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] focus:outline-none focus:ring focus:ring-emerald-500/40"
+                      className="mb-1 w-full rounded bg-slate-950 px-2 py-1 text-[11px] border border-slate-700 focus:outline-none focus:ring focus:ring-emerald-500/40"
                     />
                     <button
                       onClick={() =>
                         handleAddCard(list.id, newCardTitles[list.id] ?? "")
                       }
-                      className="w-full rounded bg-emerald-600 py-1 text-[11px] font-medium hover:bg-emerald-500"
+                      className="w-full rounded bg-emerald-600 hover:bg-emerald-500 text-[11px] font-medium py-1"
                     >
                       + Add card
                     </button>
@@ -466,8 +539,8 @@ export default function BoardPage({ params }: PageProps) {
               </div>
             ))}
 
-            {/* Column to create new list */}
-            <div className="flex w-72 flex-shrink-0 flex-col gap-2 rounded-xl border border-dashed border-emerald-500/60 bg-slate-900/40 p-3">
+            {/* Add new list column */}
+            <div className="w-72 flex-shrink-0 rounded-xl border border-dashed border-emerald-500/40 bg-slate-900/40 p-3 flex flex-col gap-2">
               <h2 className="text-sm font-semibold text-emerald-300">
                 Add new list
               </h2>
@@ -482,74 +555,109 @@ export default function BoardPage({ params }: PageProps) {
                     handleCreateList();
                   }
                 }}
-                className="mb-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs focus:outline-none focus:ring focus:ring-emerald-500/40"
+                className="w-full rounded bg-slate-950 px-2 py-1 text-[11px] border border-slate-700 focus:outline-none focus:ring focus:ring-emerald-500/40"
               />
               <button
                 onClick={handleCreateList}
-                className="w-full rounded bg-emerald-600 py-1 text-xs font-medium hover:bg-emerald-500"
+                disabled={creatingList}
+                className="w-full rounded bg-emerald-600 hover:bg-emerald-500 text-[11px] font-medium py-1 disabled:opacity-60"
               >
-                + Create list
+                {creatingList ? "Creating..." : "+ Create list"}
               </button>
             </div>
           </div>
         )}
       </section>
 
-      {/* CARD MODAL */}
-      {selectedCard && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="w-full max-w-md rounded-xl border border-slate-700 bg-slate-900 p-4 shadow-xl">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-100">
-                Edit card
-              </h2>
+      {/* Confirmation modal for deleting lists */}
+      {confirmListId && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60">
+          <div className="w-full max-w-sm rounded-xl border border-slate-800 bg-slate-900 px-5 py-4 shadow-xl">
+            <h3 className="text-sm font-semibold text-slate-50 mb-2">
+              Delete list
+            </h3>
+            <p className="text-xs text-slate-300 mb-4">
+              Are you sure you want to delete the list{" "}
+              <span className="font-semibold text-emerald-300">
+                {confirmListName}
+              </span>{" "}
+              and all its cards? This action cannot be undone.
+            </p>
+
+            <div className="flex justify-end gap-2">
               <button
-                onClick={closeCardModal}
-                className="rounded bg-slate-800 px-2 py-0.5 text-xs hover:bg-slate-700"
+                onClick={closeListConfirm}
+                disabled={deletingListId === confirmListId}
+                className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1 text-xs font-medium text-slate-100 hover:bg-slate-700 disabled:opacity-60"
               >
-                ✕
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDeleteList(confirmListId)}
+                disabled={deletingListId === confirmListId}
+                className="rounded-lg bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-500 disabled:opacity-60"
+              >
+                {deletingListId === confirmListId ? "Deleting..." : "Delete"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
 
-            <label className="mb-2 block text-xs font-medium text-slate-300">
-              Title
-            </label>
-            <input
-              type="text"
-              value={modalTitle}
-              onChange={(e) => setModalTitle(e.target.value)}
-              className="mb-3 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs focus:outline-none focus:ring focus:ring-emerald-500/40"
-            />
+      {/* Modal for viewing / editing card content */}
+      {activeCard && activeCardListId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <div className="w-full max-w-md rounded-xl border border-slate-800 bg-slate-900 px-5 py-4 shadow-2xl">
+            <h3 className="text-sm font-semibold text-slate-50 mb-3">
+              Card details
+            </h3>
 
-            <label className="mb-2 block text-xs font-medium text-slate-300">
-              Description
-            </label>
-            <textarea
-              value={modalDescription}
-              onChange={(e) => setModalDescription(e.target.value)}
-              rows={4}
-              className="mb-4 w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-xs focus:outline-none focus:ring focus:ring-emerald-500/40"
-            />
+            <div className="mb-3">
+              <label className="mb-1 block text-[11px] text-slate-400">
+                Title
+              </label>
+              <input
+                value={cardTitleInput}
+                onChange={(e) => setCardTitleInput(e.target.value)}
+                className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm focus:outline-none focus:ring focus:ring-emerald-500/40"
+              />
+            </div>
+
+            <div className="mb-4">
+              <label className="mb-1 block text-[11px] text-slate-400">
+                Description
+              </label>
+              <textarea
+                value={cardDescInput}
+                onChange={(e) => setCardDescInput(e.target.value)}
+                rows={4}
+                className="w-full resize-none rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm focus:outline-none focus:ring focus:ring-emerald-500/40"
+              />
+            </div>
 
             <div className="flex justify-between gap-2">
               <button
                 onClick={handleDeleteCardFromModal}
-                className="rounded bg-red-700 px-3 py-1 text-xs font-medium hover:bg-red-600"
+                disabled={deletingCardId === activeCard.id}
+                className="rounded-lg bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-500 disabled:opacity-60"
               >
-                Delete card
+                {deletingCardId === activeCard.id ? "Deleting..." : "Delete"}
               </button>
-              <div className="ml-auto flex gap-2">
+
+              <div className="flex gap-2">
                 <button
                   onClick={closeCardModal}
-                  className="rounded bg-slate-800 px-3 py-1 text-xs hover:bg-slate-700"
+                  disabled={savingCard}
+                  className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1 text-xs font-medium text-slate-100 hover:bg-slate-700 disabled:opacity-60"
                 >
                   Cancel
                 </button>
                 <button
-                  onClick={handleSaveCardModal}
-                  className="rounded bg-emerald-600 px-3 py-1 text-xs font-medium hover:bg-emerald-500"
+                  onClick={handleSaveCard}
+                  disabled={savingCard}
+                  className="rounded-lg bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-60"
                 >
-                  Save
+                  {savingCard ? "Saving..." : "Save changes"}
                 </button>
               </div>
             </div>

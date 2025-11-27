@@ -1,11 +1,7 @@
 // app/api/boards/[boardId]/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { ObjectId } from "mongodb";
-
-type RouteContext = {
-  params: Promise<{ boardId: string }>;
-};
 
 function getObjectId(id: string) {
   try {
@@ -15,26 +11,27 @@ function getObjectId(id: string) {
   }
 }
 
-// GET /api/boards/[boardId]  -> get single board
-export async function GET(
-  _request: NextRequest,
-  context: RouteContext
-) {
-  const { boardId } = await context.params;
-  const objectId = getObjectId(boardId);
+type RouteContext = {
+  params: Promise<{ boardId: string }>;
+};
 
-  if (!objectId) {
-    return NextResponse.json(
-      { error: "Invalid board id" },
-      { status: 400 }
-    );
-  }
-
+// GET /api/boards/:boardId  -> return one board
+export async function GET(_request: Request, context: RouteContext) {
   try {
+    const { boardId } = await context.params;
+    const boardObjectId = getObjectId(boardId);
+
+    if (!boardObjectId) {
+      return NextResponse.json(
+        { error: "Invalid board id" },
+        { status: 400 }
+      );
+    }
+
     const db = await getDb();
     const boards = db.collection("boards");
 
-    const board = await boards.findOne({ _id: objectId });
+    const board = await boards.findOne({ _id: boardObjectId });
 
     if (!board) {
       return NextResponse.json(
@@ -43,58 +40,48 @@ export async function GET(
       );
     }
 
-    return NextResponse.json({
-      id: board._id.toString(),
-      name: board.name as string,
-      createdAt: board.createdAt,
-      updatedAt: board.updatedAt,
-    });
-  } catch (err: any) {
-    console.error("GET /api/boards/[boardId] error:", err);
+    return NextResponse.json(board);
+  } catch (error) {
+    console.error("Error fetching board:", error);
     return NextResponse.json(
-      { error: err?.message ?? "Unknown error" },
+      { error: "Failed to fetch board" },
       { status: 500 }
     );
   }
 }
 
-// PATCH /api/boards/[boardId]  -> rename board
-export async function PATCH(
-  request: NextRequest,
-  context: RouteContext
-) {
-  const { boardId } = await context.params;
-  const objectId = getObjectId(boardId);
-
-  if (!objectId) {
-    return NextResponse.json(
-      { error: "Invalid board id" },
-      { status: 400 }
-    );
-  }
-
-  const body = await request.json();
-  const name = (body.name ?? "").toString().trim();
-
-  if (!name) {
-    return NextResponse.json(
-      { error: "Name is required" },
-      { status: 400 }
-    );
-  }
-
+// PATCH /api/boards/:boardId  -> rename board
+export async function PATCH(request: Request, context: RouteContext) {
   try {
+    const { boardId } = await context.params;
+    const boardObjectId = getObjectId(boardId);
+
+    if (!boardObjectId) {
+      return NextResponse.json(
+        { error: "Invalid board id" },
+        { status: 400 }
+      );
+    }
+
+    const body = await request.json();
+    const name = (body?.name ?? "").toString().trim();
+
+    if (!name) {
+      return NextResponse.json(
+        { error: "Name is required" },
+        { status: 400 }
+      );
+    }
+
     const db = await getDb();
     const boards = db.collection("boards");
-    const now = new Date();
 
     const result = await boards.findOneAndUpdate(
-      { _id: objectId },
-      { $set: { name, updatedAt: now } },
+      { _id: boardObjectId },
+      { $set: { name, updatedAt: new Date() } },
       { returnDocument: "after" }
     );
 
-    // IMPORTANT: guard both result and result.value
     if (!result || !result.value) {
       return NextResponse.json(
         { error: "Board not found" },
@@ -102,73 +89,61 @@ export async function PATCH(
       );
     }
 
-    const board = result.value;
-
-    return NextResponse.json({
-      id: board._id.toString(),
-      name: board.name as string,
-      createdAt: board.createdAt,
-      updatedAt: board.updatedAt,
-    });
-  } catch (err: any) {
-    console.error("PATCH /api/boards/[boardId] error:", err);
+    return NextResponse.json(result.value);
+  } catch (error) {
+    console.error("Error renaming board:", error);
     return NextResponse.json(
-      { error: err?.message ?? "Unknown error" },
+      { error: "Failed to rename board" },
       { status: 500 }
     );
   }
 }
 
-// DELETE /api/boards/[boardId]  -> delete board + its lists + cards
-export async function DELETE(
-  _request: NextRequest,
-  context: RouteContext
-) {
-  const { boardId } = await context.params;
-  const objectId = getObjectId(boardId);
-
-  if (!objectId) {
-    return NextResponse.json(
-      { error: "Invalid board id" },
-      { status: 400 }
-    );
-  }
-
+// DELETE /api/boards/:boardId  -> delete board + its lists & cards
+export async function DELETE(_request: Request, context: RouteContext) {
   try {
+    const { boardId } = await context.params;
+    const boardObjectId = getObjectId(boardId);
+
+    if (!boardObjectId) {
+      return NextResponse.json(
+        { error: "Invalid board id" },
+        { status: 400 }
+      );
+    }
+
     const db = await getDb();
     const boards = db.collection("boards");
     const lists = db.collection("lists");
     const cards = db.collection("cards");
 
-    // Find lists of this board
-    const boardLists = await lists
-      .find({ boardId: objectId.toString() })
-      .toArray();
-    const listIds = boardLists.map((l) => l._id.toString());
+    // delete the board itself
+    const boardResult = await boards.deleteOne({ _id: boardObjectId });
 
-    // Delete cards from those lists
-    if (listIds.length > 0) {
-      await cards.deleteMany({ listId: { $in: listIds } });
-    }
-
-    // Delete lists
-    await lists.deleteMany({ boardId: objectId.toString() });
-
-    // Delete board
-    const result = await boards.deleteOne({ _id: objectId });
-
-    if (result.deletedCount === 0) {
+    if (boardResult.deletedCount === 0) {
       return NextResponse.json(
         { error: "Board not found" },
         { status: 404 }
       );
     }
 
+    // cascade delete lists and cards belonging to this board
+    const boardLists = await lists
+      .find({ boardId })
+      .project<{ _id: ObjectId }>({ _id: 1 })
+      .toArray();
+
+    if (boardLists.length > 0) {
+      const listIds = boardLists.map((l) => l._id.toString());
+      await lists.deleteMany({ boardId });
+      await cards.deleteMany({ listId: { $in: listIds } });
+    }
+
     return NextResponse.json({ success: true });
-  } catch (err: any) {
-    console.error("DELETE /api/boards/[boardId] error:", err);
+  } catch (error) {
+    console.error("Error deleting board:", error);
     return NextResponse.json(
-      { error: err?.message ?? "Unknown error" },
+      { error: "Failed to delete board" },
       { status: 500 }
     );
   }
