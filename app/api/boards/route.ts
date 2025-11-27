@@ -1,71 +1,38 @@
-import { NextResponse } from "next/server";
+// app/api/boards/route.ts
+import { NextResponse, NextRequest } from "next/server";
 import { getDb } from "@/lib/db";
-import { ObjectId } from "mongodb";
 
-function getObjectId(id: string) {
+// GET /api/boards  -> list all boards
+export async function GET(_request: NextRequest) {
   try {
-    return new ObjectId(id);
-  } catch {
-    return null;
-  }
-}
-
-// Next 16: params is a Promise and must be awaited
-type RouteContext = { params: Promise<{ boardId: string }> };
-
-// GET single board
-export async function GET(_request: Request, context: RouteContext) {
-  try {
-    const { boardId } = await context.params;
-    const objectId = getObjectId(boardId);
-
-    if (!objectId) {
-      return NextResponse.json(
-        { error: "Invalid board id" },
-        { status: 400 }
-      );
-    }
-
     const db = await getDb();
     const boardsCollection = db.collection("boards");
 
-    const board = await boardsCollection.findOne({ _id: objectId });
+    const boards = await boardsCollection
+      .find({})
+      .sort({ createdAt: 1 })
+      .toArray();
 
-    if (!board) {
-      return NextResponse.json(
-        { error: "Board not found" },
-        { status: 404 }
-      );
-    }
+    const data = boards.map((b) => ({
+      id: b._id.toString(),
+      name: b.name as string,
+      createdAt: b.createdAt,
+      updatedAt: b.updatedAt,
+    }));
 
-    return NextResponse.json({
-      id: board._id.toString(),
-      name: board.name as string,
-      createdAt: board.createdAt,
-      updatedAt: board.updatedAt,
-    });
+    return NextResponse.json(data);
   } catch (error: any) {
-    console.error("GET /api/boards/[boardId] error:", error);
+    console.error("GET /api/boards error:", error);
     return NextResponse.json(
-      { error: error.message ?? "Unknown error" },
+      { error: error?.message ?? "Unknown error" },
       { status: 500 }
     );
   }
 }
 
-// PATCH rename board
-export async function PATCH(request: Request, context: RouteContext) {
+// POST /api/boards  -> create new board
+export async function POST(request: NextRequest) {
   try {
-    const { boardId } = await context.params;
-    const objectId = getObjectId(boardId);
-
-    if (!objectId) {
-      return NextResponse.json(
-        { error: "Invalid board id" },
-        { status: 400 }
-      );
-    }
-
     const body = await request.json();
     const name = (body.name ?? "").toString().trim();
 
@@ -81,67 +48,25 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     const now = new Date();
 
-    const result = await boardsCollection.findOneAndUpdate(
-      { _id: objectId },
-      { $set: { name, updatedAt: now } },
-      { returnDocument: "after" }
-    );
-
-    // TypeScript fix: result itself may be null
-    if (!result || !result.value) {
-      return NextResponse.json(
-        { error: "Board not found" },
-        { status: 404 }
-      );
-    }
-
-    const board = result.value;
-
-    return NextResponse.json({
-      id: board._id.toString(),
-      name: board.name as string,
-      createdAt: board.createdAt,
-      updatedAt: board.updatedAt,
+    const insertResult = await boardsCollection.insertOne({
+      name,
+      createdAt: now,
+      updatedAt: now,
     });
-  } catch (error: any) {
-    console.error("PATCH /api/boards/[boardId] error:", error);
+
     return NextResponse.json(
-      { error: error.message ?? "Unknown error" },
-      { status: 500 }
+      {
+        id: insertResult.insertedId.toString(),
+        name,
+        createdAt: now,
+        updatedAt: now,
+      },
+      { status: 201 }
     );
-  }
-}
-
-// DELETE board
-export async function DELETE(_request: Request, context: RouteContext) {
-  try {
-    const { boardId } = await context.params;
-    const objectId = getObjectId(boardId);
-
-    if (!objectId) {
-      return NextResponse.json(
-        { error: "Invalid board id" },
-        { status: 400 }
-      );
-    }
-
-    const db = await getDb();
-    const boardsCollection = db.collection("boards");
-
-    const result = await boardsCollection.deleteOne({ _id: objectId });
-
-    if (result.deletedCount === 0) {
-      return NextResponse.json(
-        { error: "Board not found" },
-        { status: 404 }
-      );
-    }
-
-    return NextResponse.json({ ok: true });
   } catch (error: any) {
-    console.error("DELETE /api/boards/[boardId] error:", error);
+    console.error("POST /api/boards error:", error);
     return NextResponse.json(
-      { error: error.message ?? "Unknown error" },
+      { error: error?.message ?? "Unknown error" },
       { status: 500 }
     );
   }
