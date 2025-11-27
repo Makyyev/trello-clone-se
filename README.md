@@ -131,3 +131,12 @@ All endpoints validate object IDs and return appropriate HTTP codes (`400`, `404
 npm install
 # or
 yarn install
+
+## Deployment
+
+The application is deployed on Vercel and is publicly accessible at:
+
+**Production URL:** https://trello-clone-se-pfxq.vercel.app/
+
+The deployment is connected to the `main` branch of the GitHub repository.  
+Every push to `main` triggers an automatic rebuild and redeploy on Vercel.
